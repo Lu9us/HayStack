@@ -15,52 +15,101 @@ struct processingData
     int uuidLength;
     int bufferSize;
     int *fileHandle;
+    int threadID;
 };
 
+struct BackBuffer
+{
 
+    char *p_buff;
+    int *fileHandle;
+    int haystackBufferLength;
+    int uuidLength;
+    int used;
+    int ready;
+};
 
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int totalProcessed = 0;
 int totalRead = 0;
 size_t haySize = 0;
 size_t chunks = 0;
-int* matched;
+int *matched;
+
+void *getBackBuffer(void *backupBuffer)
+{
+    struct BackBuffer *data = (struct BackBuffer *)backupBuffer;
+    if ((chunks < haySize) && data->used == 1)
+    {
+        int readSize = read(*data->fileHandle, data->p_buff, data->haystackBufferLength * data->uuidLength * sizeof(char));
+        pthread_mutex_lock(&mutex);
+        chunks += readSize;
+        pthread_mutex_unlock(&mutex);
+        data->used = 0;
+        data->ready = 0;
+    }
+}
+
 
 void *processBuffer(void *processingDat)
 {
-     struct processingData *data = (struct processingData *)processingDat;
-    int  matchedBuffer [data->haystackBufferLength];
-
+    struct processingData *data = (struct processingData *)processingDat;
+    int matchedBuffer[data->haystackBufferLength];
+    pthread_t backBufferThread;
+    struct BackBuffer buffer;
+    buffer.fileHandle = data->fileHandle;
+    buffer.haystackBufferLength = data->haystackBufferLength;
+    buffer.uuidLength = data->uuidLength;
+    buffer.used = 1;
+    buffer.ready = 1;
+    buffer.p_buff = malloc(data->haystackBufferLength * data->uuidLength * sizeof(char));
+    char * line = malloc(data->uuidLength * sizeof(char));
     while (chunks < haySize)
     {
-        
+
         size_t readSize = 0;
-        memset(matchedBuffer,0x00,sizeof(int)*data->haystackBufferLength);
-        pthread_mutex_lock(&mutex);
-        readSize = read(*data->fileHandle, data->buffer, data->haystackBufferLength * data->uuidLength * sizeof(char));
-        chunks += readSize;
-        pthread_mutex_unlock(&mutex);
+        /* memset(matchedBuffer, 0x00, sizeof(int) * data->haystackBufferLength); */
+
+        if (buffer.used == 1)
+        {
+            readSize = read(*data->fileHandle, data->buffer, data->haystackBufferLength * data->uuidLength * sizeof(char));
+            pthread_mutex_lock(&mutex);
+            /*  printf("thread: ");
+            printf("%d",data->threadID);
+            printf(" creating backbuffer\n"); */
+            chunks += readSize;
+            pthread_mutex_unlock(&mutex);
+        }
+        else
+        {
+
+            data->buffer = buffer.p_buff;
+            buffer.p_buff = malloc(data->haystackBufferLength * data->uuidLength * sizeof(char));
+            buffer.used = 1;
+            pthread_create(&backBufferThread, NULL, &getBackBuffer, (void *)&buffer);
+            /*    pthread_mutex_lock(&mutex);
+             printf("thread: ");
+            printf("%d",data->threadID);
+            printf(" using backbuffer\n");
+               pthread_mutex_unlock(&mutex); */
+        }
+
         int matches = 0;
 
         for (int y = 0; y < data->bufferSize; y++)
         {
-            if(matched[y]==1)
+            if (matched[y] == 1)
             {
                 continue;
             }
             for (int x = 0; x < data->haystackBufferLength; x++)
             {
-                if(matchedBuffer[x]==1)
-            {
-                continue;
-            }
 
-                if (memcmp(data->buffer + (x * data->uuidLength), data->lineBuffer[y], data->uuidLength) == 0)
+                if (  memcmp(data->buffer + (x * data->uuidLength), data->lineBuffer[y], data->uuidLength) == 0 )
                 {
 
                     printf(data->lineBuffer[y]);
 
-         
                     matches++;
                     matchedBuffer[x] = 1;
                     pthread_mutex_lock(&mutex);
@@ -70,9 +119,7 @@ void *processBuffer(void *processingDat)
 
                     break;
                 }
-                else
-                {
-                }
+              
             }
         }
     }
@@ -88,8 +135,8 @@ int main(int argc, char *argv[])
     int needles = 0;
     char cwd[1024];
     int uuidLength = 38;
-    int haystackBufferLength = 1024;
-    
+    int haystackBufferLength = 10083;
+
     if (getcwd(cwd, sizeof(cwd)) != NULL)
     {
         //printf(cwd);
@@ -124,6 +171,7 @@ int main(int argc, char *argv[])
             }
         }
     }
+
     int bufferSize = 32;
     char **lineBuffer = malloc(bufferSize * sizeof(*lineBuffer));
     char *line;
@@ -155,13 +203,15 @@ int main(int argc, char *argv[])
     }
 
     bufferSize = i;
-    matched = malloc(bufferSize* sizeof(int));
-    char *buffer = malloc(haystackBufferLength * uuidLength * sizeof(char));
+    int initalThreads = 12;
+
+    matched = malloc(bufferSize * sizeof(int));
+    //char *buffer = malloc(haystackBufferLength * uuidLength * sizeof(char));
     int ch;
 
     int matches = 0;
     int readSize = 0;
-    int initalThreads = 32;
+
     uuidLength = strlen(lineBuffer[0]);
     threadArray = malloc(sizeof(pthread_t) * initalThreads);
     char threadBuffers[initalThreads][haystackBufferLength * uuidLength * sizeof(char)];
@@ -181,6 +231,7 @@ int main(int argc, char *argv[])
 
     if (bufferSize > 100)
     {
+
         while (threads < initalThreads)
         {
 
@@ -192,7 +243,7 @@ int main(int argc, char *argv[])
             buffData->lineBuffer = lineBuffer;
             buffData->haystackBufferLength = haystackBufferLength;
             buffData->fileHandle = &hayFile;
-
+            buffData->threadID = threads;
             //threadArray[threads];
             pthread_create(&threadArray[threads], NULL, processBuffer, (void *)buffData);
             threads++;
@@ -208,6 +259,7 @@ int main(int argc, char *argv[])
         buffData->lineBuffer = lineBuffer;
         buffData->haystackBufferLength = haystackBufferLength;
         buffData->fileHandle = &hayFile;
+        buffData->threadID = 0;
         processBuffer((void *)buffData);
     }
 
