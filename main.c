@@ -29,26 +29,133 @@ struct BackBuffer
     int ready;
 };
 
+struct HashNode
+{
+    uint hash;
+    char * value;
+    struct HashNode * overflow;
+};
+
+struct HashMap 
+{
+    struct HashNode ** data;
+    int size;
+};
+
+uint hashFunct(char * word)
+{
+uint hashAddress = 5381;
+for (int counter = 0; word[counter]!='\n'&&word[counter] != '\0'; counter++){
+    hashAddress = ((hashAddress << 5) + hashAddress) + word[counter];
+}
+return hashAddress;
+}
+
+struct HashMap* createHashMap(struct HashMap* map,size_t size)
+{
+    map = malloc(sizeof(struct HashMap));
+    map->data = malloc((size*sizeof(struct HashNode))*2);
+    map->size = size*2;
+    return map;
+}
+
+void putInMap(struct HashMap* map,char * data)
+{
+    uint hash = hashFunct(data);
+    if(!map->data[hash%map->size])
+    {
+        map->data[hash%map->size] = malloc(sizeof(struct HashNode));
+        map->data[hash%map->size]->hash=hash;
+        map->data[hash%map->size]->value = data;
+        map->data[hash%map->size]->overflow = NULL;
+    }
+    else 
+    {
+       struct HashNode * node = map->data[hash%map->size];
+             int nullcheck = 0;
+        while(nullcheck == 0)
+        {
+            
+                if(node->overflow)
+                {
+                node=node->overflow;
+                }
+                else
+                {
+                    nullcheck = 1;
+                }
+            
+            
+        }
+       
+        node->overflow = malloc(sizeof(struct HashNode));
+        node->overflow ->hash=hash;
+        node->overflow ->value = data;
+        node->overflow->overflow = NULL;    
+        
+
+    }
+    
+
+}
+
+int inMap(char * data,struct HashMap * map)
+{
+uint hash = hashFunct(data);
+    if(map->data[hash%map->size] != NULL)
+    {
+       struct HashNode* node =  map->data[hash%map->size];
+        if(map->data[hash%map->size]->hash == hash&&strcmp(data,node->value)==0)
+        {
+        return 0;
+        }
+
+        while(node->overflow)
+        {
+            node = node->overflow;
+            if(node->hash == hash&&strcmp(data,node->value)==0)
+            {
+                return 0;
+            }
+
+        }
+    }
+    return 1;
+}
+
+int getMapSize(struct HashMap * map)
+{
+    int count = 0;
+    for(int i = 0;i<map->size;i++)
+    {
+        struct HashNode* node = map->data[i];
+    if(node)
+    {
+         while(node->overflow)
+        {
+            node = node->overflow;
+            count++;
+
+        } 
+        count++;
+    }
+    
+    }
+    return count;
+
+}
+
+
+
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 int totalProcessed = 0;
 int totalRead = 0;
+int totalSize;
 size_t haySize = 0;
 size_t chunks = 0;
 int *matched;
+struct HashMap* map;
 
-void *getBackBuffer(void *backupBuffer)
-{
-    struct BackBuffer *data = (struct BackBuffer *)backupBuffer;
-    if ((chunks < haySize) && data->used == 1)
-    {
-        int readSize = read(*data->fileHandle, data->p_buff, data->haystackBufferLength * data->uuidLength * sizeof(char));
-        pthread_mutex_lock(&mutex);
-        chunks += readSize;
-        pthread_mutex_unlock(&mutex);
-        data->used = 0;
-        data->ready = 0;
-    }
-}
 
 
 void *processBuffer(void *processingDat)
@@ -56,13 +163,7 @@ void *processBuffer(void *processingDat)
     struct processingData *data = (struct processingData *)processingDat;
     int matchedBuffer[data->haystackBufferLength];
     pthread_t backBufferThread;
-    struct BackBuffer buffer;
-    buffer.fileHandle = data->fileHandle;
-    buffer.haystackBufferLength = data->haystackBufferLength;
-    buffer.uuidLength = data->uuidLength;
-    buffer.used = 1;
-    buffer.ready = 1;
-    buffer.p_buff = malloc(data->haystackBufferLength * data->uuidLength * sizeof(char));
+    int x = 0;
     char * line = malloc(data->uuidLength * sizeof(char));
     while (chunks < haySize)
     {
@@ -70,59 +171,45 @@ void *processBuffer(void *processingDat)
         size_t readSize = 0;
         /* memset(matchedBuffer, 0x00, sizeof(int) * data->haystackBufferLength); */
 
-        if (buffer.used == 1)
-        {
+        
             readSize = read(*data->fileHandle, data->buffer, data->haystackBufferLength * data->uuidLength * sizeof(char));
             pthread_mutex_lock(&mutex);
-            /*  printf("thread: ");
-            printf("%d",data->threadID);
-            printf(" creating backbuffer\n"); */
             chunks += readSize;
             pthread_mutex_unlock(&mutex);
-        }
-        else
-        {
-
-            data->buffer = buffer.p_buff;
-            buffer.p_buff = malloc(data->haystackBufferLength * data->uuidLength * sizeof(char));
-            buffer.used = 1;
-            pthread_create(&backBufferThread, NULL, &getBackBuffer, (void *)&buffer);
-            /*    pthread_mutex_lock(&mutex);
-             printf("thread: ");
-            printf("%d",data->threadID);
-            printf(" using backbuffer\n");
-               pthread_mutex_unlock(&mutex); */
-        }
+    
 
         int matches = 0;
 
-        for (int y = 0; y < data->bufferSize; y++)
-        {
-            if (matched[y] == 1)
-            {
-                continue;
-            }
-            for (int x = 0; x < data->haystackBufferLength; x++)
+  
+            
+            for (x = 0; x < data->haystackBufferLength; x++)
             {
 
-                if (  memcmp(data->buffer + (x * data->uuidLength), data->lineBuffer[y], data->uuidLength) == 0 )
+                strncpy(line,data->buffer + (x * data->uuidLength),data->uuidLength);
+            
+                if ( inMap(line,map)==0)  //memcmp(data->buffer + (x * data->uuidLength), data->lineBuffer[y], data->uuidLength) == 0 )
                 {
+                    if(totalProcessed>=totalSize)
+                    {
+                        return NULL;
+                    }
 
-                    printf(data->lineBuffer[y]);
+                    printf(line);
 
                     matches++;
-                    matchedBuffer[x] = 1;
+                    
                     pthread_mutex_lock(&mutex);
                     totalProcessed++;
-                    matched[y] = 1;
+                
                     pthread_mutex_unlock(&mutex);
-
-                    break;
+                   
+            
                 }
+            
               
             }
-        }
-    }
+        
+  }  
 }
 
 int main(int argc, char *argv[])
@@ -135,7 +222,7 @@ int main(int argc, char *argv[])
     int needles = 0;
     char cwd[1024];
     int uuidLength = 38;
-    int haystackBufferLength = 10083;
+    int haystackBufferLength = 10000;
 
     if (getcwd(cwd, sizeof(cwd)) != NULL)
     {
@@ -173,6 +260,7 @@ int main(int argc, char *argv[])
     }
 
     int bufferSize = 32;
+    
     char **lineBuffer = malloc(bufferSize * sizeof(*lineBuffer));
     char *line;
     line = malloc(uuidLength * sizeof(char));
@@ -201,23 +289,30 @@ int main(int argc, char *argv[])
 
         // printf("%d",i);
     }
+   
 
     bufferSize = i;
-    int initalThreads = 12;
+    int initalThreads = 8;
 
-    matched = malloc(bufferSize * sizeof(int));
-    //char *buffer = malloc(haystackBufferLength * uuidLength * sizeof(char));
+    map = createHashMap(map,bufferSize);
+    for(i = 0;i<bufferSize;i++)
+    {
+        putInMap(map,lineBuffer[i]);
+    }
+
+    int mapSize = getMapSize(map);
+        //char *buffer = malloc(haystackBufferLength * uuidLength * sizeof(char));
     int ch;
 
     int matches = 0;
     int readSize = 0;
-
+    matched = malloc(sizeof(int)*bufferSize);
     uuidLength = strlen(lineBuffer[0]);
     threadArray = malloc(sizeof(pthread_t) * initalThreads);
     char threadBuffers[initalThreads][haystackBufferLength * uuidLength * sizeof(char)];
     struct processingData *buffData;
     int threads = 0;
-
+    totalSize = bufferSize;
     if (totalProcessed >= bufferSize)
     {
         return 0;
@@ -266,7 +361,7 @@ int main(int argc, char *argv[])
     for (i = 0; i <= threads; i++)
         pthread_join(threadArray[i], NULL);
 
-    //  printf("%d",totalProcessed);
+      //printf("%d",totalProcessed);
     // printf("%d",totalRead);
     return 0;
 }
